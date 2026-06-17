@@ -1,0 +1,2 @@
+stock_id,risk_level,reason,source,event_date,expire_date
+6806,HIGH,使用者手動標註重大事件風險，暫不納入模型觀察清單,manual,2026-06-16,2026-12-31

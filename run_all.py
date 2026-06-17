@@ -7,10 +7,11 @@
 
 預設會做：
   1. 更新 stocks.txt
-  2. 強制重新抓所有股票/ETF 價量 CSV，並產生 all_price.csv
+  2. 抓取一般股票價量 CSV，並產生 all_price.csv
   3. 用 all_price.csv 訓練 LightGBM 未來 5 日漲跌模型
-  4. 把預測/回測報表轉成手機方便看的 HTML
-  5. 入口頁在 html/index.html
+  4. 套用重大事件風險清單，產生 final_stock_radar.csv
+  5. 把股票雷達/預測/回測報表轉成手機方便看的 HTML
+  6. 入口頁在 html/index.html
 
 第一次執行前請確認已安裝：
     pip install pandas numpy requests lxml html5lib lightgbm
@@ -28,7 +29,7 @@
     python run_all.py --html-all-csv
 
 注意：
-    預設 --force 會重新抓指定日期區間的所有股票/ETF，2285 檔會跑很久。
+    預設 --force 會重新抓指定日期區間的所有一般股票，會跑很久。
     若只是中斷後續跑，請使用 --resume。
 """
 
@@ -49,6 +50,7 @@ REQUIRED_FILES = {
     "stock_list": "make_stocks_txt.py",
     "fetch": "example.py",
     "train": "train_lightgbm_5d.py",
+    "risk": "apply_risk_filter.py",
     "html": "csv_to_html.py",
 }
 
@@ -122,6 +124,10 @@ def check_required_files(args: argparse.Namespace) -> None:
         if not Path(REQUIRED_FILES["train"]).exists():
             missing.append(REQUIRED_FILES["train"])
 
+    if not args.skip_risk_filter:
+        if not Path(REQUIRED_FILES["risk"]).exists():
+            missing.append(REQUIRED_FILES["risk"])
+
     if not args.skip_html:
         if not Path(REQUIRED_FILES["html"]).exists():
             missing.append(REQUIRED_FILES["html"])
@@ -166,6 +172,8 @@ def backup_existing_outputs(output_dir: Path, backup: bool) -> Optional[Path]:
         "backtest_daily_topN.csv",
         "backtest_topN_summary.json",
         "feature_importance_lightgbm.csv",
+        "final_stock_radar.csv",
+        "blocked_stock_radar.csv",
         "lightgbm_5d_model.txt",
     ]
 
@@ -265,6 +273,23 @@ def build_train_cmd(args: argparse.Namespace) -> List[str]:
     return cmd
 
 
+
+def build_risk_cmd(args: argparse.Namespace) -> List[str]:
+    return [
+        sys.executable,
+        REQUIRED_FILES["risk"],
+        "--prediction",
+        str(Path(args.output_dir) / "prediction_5d_lightgbm.csv"),
+        "--risk-watchlist",
+        args.risk_watchlist,
+        "--output",
+        str(Path(args.output_dir) / args.final_output),
+        "--blocked-output",
+        str(Path(args.output_dir) / "blocked_stock_radar.csv"),
+        "--today",
+        args.end,
+    ]
+
 def build_html_cmd(args: argparse.Namespace) -> List[str]:
     html_dir = str(Path(args.output_dir) / "html")
 
@@ -286,6 +311,8 @@ def build_html_cmd(args: argparse.Namespace) -> List[str]:
         cmd.extend(
             [
                 "--include",
+                "final*.csv",
+                "blocked*.csv",
                 "prediction*.csv",
                 "backtest*.csv",
                 "feature_importance*.csv",
@@ -298,6 +325,8 @@ def build_html_cmd(args: argparse.Namespace) -> List[str]:
         cmd.extend(
             [
                 "--include",
+                "final*.csv",
+                "blocked*.csv",
                 "prediction*.csv",
                 "backtest*.csv",
                 "feature_importance*.csv",
@@ -315,6 +344,7 @@ def print_summary(args: argparse.Namespace) -> None:
     print(f"CSV 輸出: {Path(args.csv_dir).resolve()}")
     print(f"報表輸出: {Path(args.output_dir).resolve()}")
     print(f"HTML 入口: {(Path(args.output_dir) / 'html' / 'index.html').resolve()}")
+    print(f"最終股票雷達: {(Path(args.output_dir) / args.final_output).resolve()}")
     print(f"抓資料模式: {'續跑，跳過已存在 CSV' if args.resume else '強制刷新既有 CSV'}")
     print(f"sleep/retries/retry-sleep: {args.sleep}/{args.retries}/{args.retry_sleep}")
     if args.max_stocks:
@@ -347,12 +377,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--early-stopping-rounds", type=int, default=50, help="LightGBM early stopping，預設 50")
     parser.add_argument("--is-unbalance", action="store_true", help="LightGBM 類別不平衡處理")
 
+    parser.add_argument("--risk-watchlist", default="risk_watchlist.csv", help="重大事件風險清單，預設 risk_watchlist.csv")
+    parser.add_argument("--final-output", default="final_stock_radar.csv", help="最終股票雷達輸出檔，預設 final_stock_radar.csv")
     parser.add_argument("--html-max-rows", type=int, default=500, help="每個 HTML 最多顯示幾筆，0 表示不限制，預設 500")
     parser.add_argument("--html-all-csv", action="store_true", help="把所有 *_price.csv 也轉成 HTML；預設只轉預測/回測報表")
 
     parser.add_argument("--skip-stock-list", action="store_true", help="跳過更新 stocks.txt")
     parser.add_argument("--skip-fetch", action="store_true", help="跳過抓 CSV")
     parser.add_argument("--skip-train", action="store_true", help="跳過訓練 LightGBM")
+    parser.add_argument("--skip-risk-filter", action="store_true", help="跳過重大事件風險過濾")
     parser.add_argument("--skip-html", action="store_true", help="跳過轉 HTML")
     parser.add_argument("--backup", action="store_true", help="執行前把舊報表/模型/html 移到 backup/YYYYmmdd_HHMMSS")
     parser.add_argument("--dry-run", action="store_true", help="只印出會執行的命令，不真的執行")
@@ -391,6 +424,12 @@ def main() -> None:
                 raise FileNotFoundError(f"找不到 {all_price}，無法訓練。請確認抓資料步驟有加 --combined 並成功產生 all_price.csv。")
             run_cmd(build_train_cmd(args), log_path=log_path, dry_run=args.dry_run)
 
+        if not args.skip_risk_filter:
+            prediction_file = Path(args.output_dir) / "prediction_5d_lightgbm.csv"
+            if not args.dry_run and not prediction_file.exists():
+                raise FileNotFoundError(f"找不到 {prediction_file}，無法套用重大事件風險過濾。")
+            run_cmd(build_risk_cmd(args), log_path=log_path, dry_run=args.dry_run)
+
         if not args.skip_html:
             run_cmd(build_html_cmd(args), log_path=log_path, dry_run=args.dry_run)
 
@@ -408,6 +447,8 @@ def main() -> None:
 
     if not args.skip_html:
         print(f"手機入口: {(Path(args.output_dir) / 'html' / 'index.html').resolve()}")
+    if not args.skip_risk_filter:
+        print(f"最終股票雷達: {(Path(args.output_dir) / args.final_output).resolve()}")
 
 
 if __name__ == "__main__":

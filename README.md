@@ -2,7 +2,7 @@
 
 TWSTOCK 是一個本機版的台股研究工具。
 
-它可以幫你自動整理台股日線資料、建立技術指標、訓練 LightGBM 模型，並輸出預測、回測與手機可看的 HTML 報表。
+它可以幫你自動整理台股日線資料、建立技術指標、訓練 LightGBM 模型，再套用重大新聞 / 重大訊息 / 下市風險過濾，最後輸出可供人工檢查的股票雷達與手機可看的 HTML 報表。
 
 > 重要提醒：本專案只適合用於學習、研究與技術實驗，不是投資建議。模型預測可能錯誤，歷史回測不代表未來績效。
 
@@ -27,7 +27,7 @@ TWSTOCK 的研究範圍聚焦在台灣上市、上櫃的一般股票，不把 ET
 
 TWSTOCK 可以簡單理解成：
 
-> 台股資料收集 + 技術指標 + 5 日方向預測 + 回測 + HTML 報表
+> 台股資料收集 + 技術指標 + 5 日方向預測 + 重大事件風險過濾 + 股票雷達 + HTML 報表
 
 它主要可以完成以下工作：
 
@@ -37,9 +37,10 @@ TWSTOCK 可以簡單理解成：
 4. 合併所有股票資料成 `prices/all_price.csv`
 5. 建立技術指標，例如報酬率、均線乖離、RSI、成交量變化等
 6. 使用 LightGBM 模型預測未來 5 個交易日方向
-7. 產生每日 Top-N 股票觀察清單
-8. 產生回測報告與特徵重要性報告
-9. 將 CSV 報表轉成手機可看的 HTML 頁面
+7. 套用重大新聞、重大訊息、下市風險等人工風險清單
+8. 產生 `final_stock_radar.csv` 作為最終股票雷達
+9. 產生回測報告與特徵重要性報告
+10. 將 CSV 報表轉成手機可看的 HTML 頁面
 
 ---
 
@@ -73,6 +74,7 @@ TWSTOCK/
 │   └── all_price.csv
 ├── html/
 │   ├── index.html
+│   ├── final_stock_radar.html
 │   ├── prediction_5d_lightgbm.html
 │   ├── backtest_report.html
 │   ├── backtest_daily_topN.html
@@ -84,6 +86,8 @@ TWSTOCK/
 ├── example.py
 ├── local_data_loader.py
 ├── train_lightgbm_5d.py
+├── apply_risk_filter.py
+├── risk_watchlist.csv
 ├── csv_to_html.py
 ├── predict_tomorrow.py
 └── README.md
@@ -103,6 +107,8 @@ TWSTOCK/
 | `example.py` | 批次產生多檔股票 CSV 的範例 |
 | `local_data_loader.py` | 本地資料載入與抓取工具 |
 | `train_lightgbm_5d.py` | 訓練 LightGBM 模型並產生預測與回測 |
+| `apply_risk_filter.py` | 將重大事件風險清單套用到模型預測，產生最終股票雷達 |
+| `risk_watchlist.csv` | 人工維護的重大新聞 / 重大訊息 / 下市風險清單 |
 | `csv_to_html.py` | 將 CSV 報表轉成 HTML |
 | `predict_tomorrow.py` | 規則式的簡單預測範例 |
 
@@ -171,6 +177,68 @@ python run_all.py --start 2023-01-01 --csv-dir prices --output-dir . --sleep 1 -
 
 ---
 
+## 系統流程
+
+目前流程如下：
+
+```text
+價格資料 / 技術指標
+        ↓
+LightGBM 5 日方向預測
+        ↓
+prediction_5d_lightgbm.csv
+        ↓
+重大新聞 / 重大訊息 / 下市風險過濾
+        ↓
+final_stock_radar.csv
+        ↓
+HTML 報表
+```
+
+LightGBM 只負責根據價格、成交量與技術指標做排序。
+
+`apply_risk_filter.py` 會再讀取 `risk_watchlist.csv`，把有重大事件風險的股票標示為：
+
+| final_signal | 說明 |
+|---|---|
+| `WATCH` | 可列入觀察 |
+| `WATCH_WITH_CAUTION` | 有中度風險，僅能謹慎觀察 |
+| `BLOCKED` | 有高度風險，不採用模型訊號 |
+
+這樣可以避免模型只因為技術指標看起來超跌，就把有重大風險的股票放到觀察清單前面。
+
+---
+
+## 重大風險清單
+
+風險清單檔案是：
+
+```text
+risk_watchlist.csv
+```
+
+格式如下：
+
+```csv
+stock_id,risk_level,reason,source,event_date,expire_date
+6806,HIGH,使用者手動標註重大事件風險，暫不納入模型觀察清單,manual,2026-06-16,2026-12-31
+```
+
+欄位說明：
+
+| 欄位 | 說明 |
+|---|---|
+| `stock_id` | 股票代號 |
+| `risk_level` | `LOW` / `MEDIUM` / `HIGH` |
+| `reason` | 風險原因 |
+| `source` | 來源，例如 `manual`、新聞、重大訊息 |
+| `event_date` | 事件日期 |
+| `expire_date` | 風險標記到期日，過期後自動忽略 |
+
+如果某檔股票被標記為 `HIGH`，最後輸出的 `final_stock_radar.csv` 會把它標成 `BLOCKED`。
+
+---
+
 ## 每天收盤後更新
 
 第一次完整建立資料後，之後不用每天重抓全部歷史資料。
@@ -187,8 +255,9 @@ python run_daily.py --csv-dir prices --output-dir .
 2. 只補新的日線資料
 3. 重建 `prices/all_price.csv`
 4. 重新訓練模型
-5. 更新預測與回測報告
-6. 重新產生 HTML 報表
+5. 套用 `risk_watchlist.csv` 產生 `final_stock_radar.csv`
+6. 更新預測、風險過濾與回測報告
+7. 重新產生 HTML 報表
 
 建議在台股收盤後、日線資料比較穩定時再執行。
 
@@ -212,6 +281,14 @@ python run_daily.py --csv-dir prices --output-dir . --skip-train
 
 ```powershell
 python run_daily.py --csv-dir prices --output-dir . --skip-html
+```
+
+### 只重新套用風險過濾
+
+如果你只改了 `risk_watchlist.csv`，可以直接跑：
+
+```powershell
+python apply_risk_filter.py --prediction prediction_5d_lightgbm.csv --risk-watchlist risk_watchlist.csv --output final_stock_radar.csv
 ```
 
 ### 如果有缺少個股 CSV，允許自動回補
@@ -260,7 +337,9 @@ target_5d_up = future_return_5d > 0
 
 | 檔案 | 說明 |
 |---|---|
-| `prediction_5d_lightgbm.csv` | 最新一日的 5 日方向預測 |
+| `final_stock_radar.csv` | 套用重大風險過濾後的最終股票雷達 |
+| `blocked_stock_radar.csv` | 被高風險規則擋下的股票清單 |
+| `prediction_5d_lightgbm.csv` | LightGBM 原始 5 日方向預測 |
 | `backtest_report.csv` | train / valid / test 的分類評估結果 |
 | `backtest_daily_topN.csv` | 測試期間每日模型挑出的 Top-N 股票 |
 | `backtest_topN_summary.json` | Top-N 回測摘要 |
@@ -284,7 +363,9 @@ html/index.html
 
 | HTML | 說明 |
 |---|---|
-| `html/prediction_5d_lightgbm.html` | 最新 5 日方向預測 |
+| `html/final_stock_radar.html` | 套用重大風險過濾後的最終股票雷達 |
+| `html/blocked_stock_radar.html` | 被高風險規則擋下的股票清單 |
+| `html/prediction_5d_lightgbm.html` | LightGBM 原始 5 日方向預測 |
 | `html/backtest_report.html` | 模型 train / valid / test 評估 |
 | `html/backtest_daily_topN.html` | 每日 Top-N 回測結果 |
 | `html/feature_importance_lightgbm.html` | 特徵重要性 |
@@ -299,9 +380,29 @@ python csv_to_html.py --csv-dir . --output-dir html --include "prediction*.csv" 
 
 ## 如何看報表？
 
+### `final_stock_radar.csv`
+
+這份是最終股票雷達，建議優先看這份。
+
+它是在 `prediction_5d_lightgbm.csv` 的基礎上，再套用 `risk_watchlist.csv` 產生。
+
+重要欄位：
+
+| 欄位 | 說明 |
+|---|---|
+| `final_rank` | 風險過濾後的排序 |
+| `final_signal` | `WATCH` / `WATCH_WITH_CAUTION` / `BLOCKED` |
+| `news_risk_level` | `LOW` / `MEDIUM` / `HIGH` |
+| `news_risk_reason` | 重大事件或風險原因 |
+| `news_event_date` | 事件日期 |
+| `news_source` | 風險來源 |
+| `is_blocked` | 是否被高風險規則擋下 |
+
+如果 `final_signal` 是 `BLOCKED`，代表即使模型看漲，也不採用該模型訊號。
+
 ### `prediction_5d_lightgbm.csv`
 
-這份是最新的股票觀察清單。
+這份是 LightGBM 的原始預測結果，尚未套用重大風險過濾。
 
 重要欄位：
 
@@ -344,14 +445,16 @@ python csv_to_html.py --csv-dir . --output-dir html --include "prediction*.csv" 
 比較好的使用方式是：
 
 1. 每天收盤後更新資料
-2. 查看最新 `prediction_5d_lightgbm.csv`
-3. 只把模型結果當成觀察清單
-4. 搭配基本面、籌碼、成交量、產業題材與大盤趨勢
-5. 定期檢查回測是否仍然有效
+2. 優先查看最新 `final_stock_radar.csv`
+3. 如果某檔股票有重大新聞、重大訊息或下市風險，加入 `risk_watchlist.csv`
+4. 只把模型結果當成觀察清單
+5. 搭配基本面、籌碼、成交量、產業題材與大盤趨勢
+6. 定期檢查回測與風險清單是否仍然有效
 
 不建議：
 
 - 只看 `prob_up_5d` 就直接買
+- 忽略 `final_signal = BLOCKED` 的股票
 - 忽略交易成本
 - 忽略流動性
 - 用盤中資料硬跑日線模型
@@ -366,8 +469,9 @@ python csv_to_html.py --csv-dir . --output-dir html --include "prediction*.csv" 
 3. 建議收盤後再執行每日更新。
 4. 資料來源可能不穩，若更新失敗可以增加 `--sleep`、`--retries`、`--retry-sleep`。
 5. 模型預測不代表一定會發生。
-6. 回測績效不代表未來績效。
-7. 實際交易還需要考慮手續費、證交稅、滑價、流動性與風險控管。
+6. 重大風險清單需要人工維護，系統不會自動保證所有新聞都被捕捉。
+7. 回測績效不代表未來績效。
+8. 實際交易還需要考慮手續費、證交稅、滑價、流動性與風險控管。
 
 ---
 

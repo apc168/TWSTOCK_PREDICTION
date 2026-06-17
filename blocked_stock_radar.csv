@@ -1,0 +1,2 @@
+﻿final_rank,final_signal,news_risk_level,news_risk_reason,news_event_date,news_source,risk_expire_date,is_blocked,stock_id,date,close,prediction_5d,prob_up_5d,prob_down_5d,ret_1,ret_5,ret_20,ma5_gap,ma20_gap,rsi_14,volume_ratio_5,volume_ratio_20,risk_score
+,BLOCKED,HIGH,使用者手動標註重大事件風險，暫不納入模型觀察清單,2026-06-16,manual,2026-12-31,True,6806,2026-06-17,3.6,漲,0.549572,0.450428,-0.0109890109890109,-0.2756539235412474,-0.6842105263157895,-0.0721649484536083,-0.4201030927835051,29.773462783171524,1.1361389849772905,0.8987787047078167,2
